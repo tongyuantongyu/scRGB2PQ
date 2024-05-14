@@ -23,11 +23,28 @@ target_include_directories(sc2pq PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(sc2pq PUBLIC hwy)
 
 # This special target is for checking compiler-generated assembly.
-add_library(sc2pq_asm OBJECT sc2pq_asm.cpp)
-set_source_files_properties(sc2pq_asm.cpp PROPERTIES COMPILE_OPTIONS -S)
-target_include_directories(sc2pq_asm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(sc2pq_asm PRIVATE hwy)
-set_target_properties(sc2pq_asm PROPERTIES EXCLUDE_FROM_ALL ON)
+if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR CMAKE_CXX_SIMULATE_ID MATCHES "MSVC")
+    add_library(sc2pq_asm OBJECT sc2pq_asm.cpp)
+    set_source_files_properties(sc2pq_asm.cpp PROPERTIES
+            COMPILE_OPTIONS "/FAu;/Fa${CMAKE_CURRENT_BINARY_DIR}\\sc2pq.asm")
+    target_include_directories(sc2pq_asm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(sc2pq_asm PRIVATE hwy)
+    set_target_properties(sc2pq_asm PROPERTIES EXCLUDE_FROM_ALL ON)
+else ()
+    add_library(_sc2pq_asm OBJECT sc2pq_asm.cpp)
+    set_source_files_properties(sc2pq_asm.cpp PROPERTIES COMPILE_OPTIONS -S)
+    target_include_directories(_sc2pq_asm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(_sc2pq_asm PRIVATE hwy)
+    set_target_properties(_sc2pq_asm PROPERTIES EXCLUDE_FROM_ALL ON)
+    add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/sc2pq.asm
+            COMMAND cmake -E copy $<TARGET_OBJECTS:_sc2pq_asm> ${CMAKE_CURRENT_BINARY_DIR}/sc2pq.asm
+            DEPENDS _sc2pq_asm
+            VERBATIM)
+    add_custom_target(sc2pq_asm DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/sc2pq.asm)
+endif ()
+
+
 
 if (SC2PQ_LEAN_MODE)
     target_compile_definitions(sc2pq PRIVATE SC2PQ_LEAN)

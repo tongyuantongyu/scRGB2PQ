@@ -9,10 +9,13 @@
 #define HWY_BASELINE_TARGETS HWY_EMU128
 #endif
 
+#define HWY_BROKEN_TARGETS 0
+
 #define HWY_DISABLED_TARGETS ~(HWY_AVX2 | HWY_AVX3 | HWY_SSE2 | HWY_NEON | HWY_EMU128)
 
 #include <array>
 #include <cstring>
+#include <cmath>
 
 #include <hwy/foreach_target.h>// must come before highway.h
 
@@ -134,14 +137,12 @@ SC2PQ_INTRIN_FUNC auto PerceptualQuantizationD16(T x) {
 }
 
 template<class T>
-SC2PQ_INTRIN_FUNC auto BT709ToBT2100Clip(T r, T g, T b, T a) {
+SC2PQ_INTRIN_FUNC auto BT709ToBT2100Clip(T cr, T g, T cb, T a) {
   hn::ScalableTag<float> d;
-  auto ro =
-      hn::MulAdd(r, hn::Set(d, 0.627409f), hn::MulAdd(g, hn::Set(d, 0.0691248f), hn::Mul(b, hn::Set(d, 0.0164234f))));
-  auto go =
-      hn::MulAdd(g, hn::Set(d, 0.919549f), hn::MulAdd(r, hn::Set(d, 0.32926f), hn::Mul(b, hn::Set(d, 0.0880478f))));
-  auto bo =
-      hn::MulAdd(b, hn::Set(d, 0.895617f), hn::MulAdd(r, hn::Set(d, 0.0432719f), hn::Mul(g, hn::Set(d, 0.0113208f))));
+
+  auto ro = hn::MulAdd(cr, hn::Set(d, 0.627403895934699f), hn::MulAdd(cb, hn::Set(d, 0.043313065687417225f), g));
+  auto go = hn::MulAdd(cr, hn::Set(d, 0.06909728935823207f), hn::MulAdd(cb, hn::Set(d, 0.01136231556630918f), g));
+  auto bo = hn::MulAdd(cb, hn::Set(d, 0.895595253247624f), hn::MulAdd(cr, hn::Set(d, 0.01639143887515028f), g));
 
   auto zero = hn::Zero(d);
   auto one = hn::Set(d, 1.0f);
@@ -163,12 +164,12 @@ SC2PQ_INTRIN_FUNC auto PerceptualQuantization(T x) {
     return PerceptualQuantizationD16(x);
   }
   else {
-    static_assert(false, "Unknown precision mode");
+    static_assert(!sizeof(T*), "Unknown precision mode");
   }
 }
 
 template<class T>
-SC2PQ_INTRIN_FUNC auto QuantNb(T x, float up) {
+SC2PQ_INTRIN_FUNC auto QuantN(T x, float up) {
   auto rx = hn::Round(Mul(x, hn::Set(hn::DFromV<T> {}, up)));
   return hn::BitCast(hn::Rebind<uint32_t, hn::DFromV<T>>(), hn::ConvertTo(hn::Rebind<int32_t, hn::DFromV<T>>(), rx));
 }
@@ -196,14 +197,14 @@ SC2PQ_INTRIN_FUNC auto LoadRGBAF16(const uint16_t *src, float unit_scale) {
   auto au = hn::ShiftLeft<13>(hn::BitCast(u32, hn::InterleaveUpper(u16, bau, zero)));
 
   auto scale = hn::Set(f32, 5.192296858534828e+33f * unit_scale);
-  auto rf = hn::Mul(hn::BitCast(f32, ru), scale);
   auto gf = hn::Mul(hn::BitCast(f32, gu), scale);
-  auto bf = hn::Mul(hn::BitCast(f32, bu), scale);
+  auto crf = hn::MulSub(hn::BitCast(f32, ru), scale, gf);
+  auto cbf = hn::MulSub(hn::BitCast(f32, bu), scale, gf);
 
   auto a_scale = hn::Set(f32, 5.192296858534828e+33f);
   auto af = hn::Mul(hn::BitCast(f32, au), a_scale);
 
-  return std::array {rf, gf, bf, af};
+  return std::array {crf, gf, cbf, af};
 }
 
 template<class T>
@@ -225,6 +226,18 @@ SC2PQ_INTRIN_FUNC auto StoreRGBAU16(uint16_t *dst, T r, T g, T b, T a) {
   hn::StoreU(y2, u16, dst + hn::Lanes(u16));
 }
 
+template<class T, class T2>
+SC2PQ_INTRIN_FUNC T WidenAdd(T v, T2 a) {
+  hn::ScalableTag<uint32_t> u32;
+  hn::ScalableTag<uint64_t> u64;
+
+  auto zero = hn::Zero(u32);
+  v = hn::Add(v, hn::BitCast(u64, hn::InterleaveLower(u32, a, zero)));
+  v = hn::Add(v, hn::BitCast(u64, hn::InterleaveUpper(u32, a, zero)));
+
+  return v;
+}
+
 #endif
 
 #if HWY_TARGET == HWY_EMU128 || HWY_TARGET == HWY_NEON
@@ -239,12 +252,12 @@ SC2PQ_INTRIN_FUNC auto LoadRGBAF16(const uint16_t *src, float unit_scale) {
 
   auto scale = hn::Set(f32, unit_scale);
 
-  auto r1 = hn::Mul(hn::PromoteTo(f32, hn::BitCast(f16_h, r)), scale);
   auto g1 = hn::Mul(hn::PromoteTo(f32, hn::BitCast(f16_h, g)), scale);
-  auto b1 = hn::Mul(hn::PromoteTo(f32, hn::BitCast(f16_h, b)), scale);
+  auto cr1 = hn::MulSub(hn::PromoteTo(f32, hn::BitCast(f16_h, r)), scale, g1);
+  auto cb1 = hn::MulSub(hn::PromoteTo(f32, hn::BitCast(f16_h, b)), scale, g1);
   auto a1 = hn::PromoteTo(f32, hn::BitCast(f16_h, a));
 
-  return std::array {r1, g1, b1, a1};
+  return std::array {cr1, g1, cb1, a1};
 }
 
 template<class T>
@@ -256,32 +269,79 @@ SC2PQ_INTRIN_FUNC auto StoreRGBAU16(uint16_t *dst, T r, T g, T b, T a) {
 
 #endif
 
+#if HWY_TARGET == HWY_NEON
+
+template<class T, class T2>
+SC2PQ_INTRIN_FUNC T WidenAdd(T v, T2 a) {
+  hn::ScalableTag<uint32_t> u32;
+  hn::ScalableTag<uint32_t>::Half u32_h;
+  hn::ScalableTag<uint64_t> u64;
+
+  v.raw = vaddw_u32(v.raw, hn::LowerHalf(u32_h, a).raw);
+  v.raw = vaddw_high_u32(v.raw, a.raw);
+
+  return v;
+}
+
+#endif
+
+#if HWY_TARGET == HWY_EMU128
+
+template<class T, class T2>
+SC2PQ_INTRIN_FUNC T WidenAdd(T v, T2 a) {
+  hn::ScalableTag<uint32_t> u32;
+  hn::ScalableTag<uint32_t>::Half u32_h;
+  hn::ScalableTag<uint64_t> u64;
+
+  v = hn::Add(v, hn::PromoteTo(u64, hn::LowerHalf(u32_h, a)));
+  v = hn::Add(v, hn::PromoteTo(u64, hn::UpperHalf(u32_h, a)));
+
+  return v;
+}
+
+#endif
+
 template<PrecisionMode mode>
-SC2PQ_INTRIN_FUNC void scRGB2PQOnce(const uint16_t *src, uint16_t *dst, scRGB2PQParams params) {
-  const auto [r, g, b, a] = LoadRGBAF16(src, params.unit_scale);
-  const auto [rc, gc, bc, ac] = BT709ToBT2100Clip(r, g, b, a);
-  const auto rq = QuantNb(PerceptualQuantization<mode>(rc), params.bound);
-  const auto gq = QuantNb(PerceptualQuantization<mode>(gc), params.bound);
-  const auto bq = QuantNb(PerceptualQuantization<mode>(bc), params.bound);
-  const auto aq = QuantNb(ac, params.bound);
+SC2PQ_INTRIN_FUNC auto scRGB2PQOnce(const uint16_t *src, uint16_t *dst, scRGB2PQParams params) {
+  const auto [cr, g, cb, a] = LoadRGBAF16(src, params.unit_scale);
+  const auto [rc, gc, bc, ac] = BT709ToBT2100Clip(cr, g, cb, a);
+
+  hn::ScalableTag<float> f32;
+  auto wo =
+      hn::MulAdd(rc, hn::Set(f32, 0.262700212011267f),
+                 hn::MulAdd(gc, hn::Set(f32, 0.677998071518871f), hn::Mul(bc, hn::Set(f32, 0.05930171646986194f))));
+
+  const auto rq = QuantN(PerceptualQuantization<mode>(rc), params.bound);
+  const auto gq = QuantN(PerceptualQuantization<mode>(gc), params.bound);
+  const auto bq = QuantN(PerceptualQuantization<mode>(bc), params.bound);
+  const auto aq = QuantN(ac, params.bound);
   StoreRGBAU16(dst, rq, gq, bq, aq);
+
+  return QuantN(wo, 10000.0f);
 };
 
 template<PrecisionMode mode>
-HWY_ATTR void scRGB2PQImpl(scRGB2PQParams params) {
+HWY_ATTR void scRGB2PQImpl(scRGB2PQParams* params) {
   hn::ScalableTag<uint16_t> u16;
+  hn::ScalableTag<uint32_t> u32;
+  hn::ScalableTag<uint64_t> u64;
 
-  for (size_t y = 0; y < params.height; ++y) {
-    const uint16_t *src = params.src + y * params.src_stride;
-    uint16_t *dst = params.dst + y * params.dst_stride;
-    size_t w = 4 * params.width;
+  auto cll = hn::Zero(u32);
+  auto pall = hn::Zero(u64);
+
+  for (size_t y = 0; y < params->height; ++y) {
+    const uint16_t *src = params->src + y * params->src_stride;
+    uint16_t *dst = params->dst + y * params->dst_stride;
+    size_t w = 4 * params->width;
 
     constexpr size_t buf1 = hn::Lanes(u16);
     constexpr size_t step = 2 * buf1;
 
     size_t i = 0;
     for (; i + step <= w; i += step) {
-      scRGB2PQOnce<mode>(src + i, dst + i, params);
+      auto b = scRGB2PQOnce<mode>(src + i, dst + i, *params);
+      cll = hn::Max(cll, b);
+      pall = WidenAdd(pall, b);
     }
 
     if (i != w) {
@@ -291,14 +351,19 @@ HWY_ATTR void scRGB2PQImpl(scRGB2PQParams params) {
 
       buf s_buf {}, d_buf {};
       memcpy(s_buf.d, src + i, (w - i) * sizeof(uint16_t));
-      scRGB2PQOnce<mode>(s_buf.d, d_buf.d, params);
+      auto b = scRGB2PQOnce<mode>(s_buf.d, d_buf.d, *params);
+      cll = hn::Max(cll, b);
+      pall = WidenAdd(pall, b);
       memcpy(dst + i, d_buf.d, (w - i) * sizeof(uint16_t));
     }
   }
+
+  params->max_nits = uint16_t(hn::ReduceMax(u32, cll));
+  params->avg_nits = uint16_t(round(double(hn::ReduceSum(u64, pall)) / double(params->width * params->height)));
 }
 
-int scRGB2PQDispatch(scRGB2PQParams params) {
-  switch (params.precision) {
+int scRGB2PQDispatch(scRGB2PQParams* params) {
+  switch (params->precision) {
     case UNorm12Bits: scRGB2PQImpl<UNorm12Bits>(params); return 0;
 #if !defined(SC2PQ_LEAN)
     case UNorm16Bits: scRGB2PQImpl<UNorm16Bits>(params); return 0;
@@ -318,11 +383,11 @@ HWY_EXPORT(scRGB2PQDispatch);
 
 }
 
-int scRGB2PQ(scRGB2PQParams params) {
-  if (params.src_stride == params.dst_stride && params.src_stride == params.width * 4) {
-    params.src_stride = params.dst_stride = 0;
-    params.width *= params.height;
-    params.height = 1;
+int scRGB2PQ(scRGB2PQParams* params) {
+  if (params->src_stride == params->dst_stride && params->src_stride == params->width * 4) {
+    params->src_stride = params->dst_stride = 0;
+    params->width *= params->height;
+    params->height = 1;
   }
 
   return HWY_DYNAMIC_DISPATCH(scRGB2PQDispatch)(params);

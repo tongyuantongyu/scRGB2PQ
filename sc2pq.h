@@ -24,11 +24,14 @@ typedef struct scRGB2PQParams {
   float bound;
   PrecisionMode precision;
 
+  // The two are statistics and will be filled by scRGB2PQ.
+  uint16_t max_nits, avg_nits;
+
 #ifdef __cplusplus
   scRGB2PQParams(const uint16_t *src, ptrdiff_t src_stride, uint16_t *dst, ptrdiff_t dst_stride, size_t width,
                  size_t height, float unit = 80.0f, uint8_t depth = 10, PrecisionMode precision = UNorm12Bits)
       : src(src), src_stride(src_stride), dst(dst), dst_stride(dst_stride), width(width), height(height),
-        unit_scale(unit / 10000.0f), bound(float((1 << depth) - 1)), precision(precision) {}
+        unit_scale(unit / 10000.0f), bound(float((1 << depth) - 1)), precision(precision), max_nits(0), avg_nits(0) {}
 #endif
 } scRGB2PQParams;
 
@@ -42,7 +45,7 @@ inline void scRGB2PQParamsDefaultScaleDepth(scRGB2PQParams *params) {
 }
 
 // Return 0 for success, otherwise failure
-int scRGB2PQ(scRGB2PQParams params);
+int scRGB2PQ(scRGB2PQParams* params);
 
 #ifdef __cplusplus
 };

@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <hwy/targets.h>
 
-#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <numeric>
@@ -16,9 +16,9 @@ static float clip(float i) {
 }
 
 static std::array<float, 3> bt709_bt2100(float r, float g, float b) {
-  return {clip(0.627409f * r + 0.0691248f * g + 0.0164234f * b),
-          clip(0.32926f * r + 0.919549f * g + 0.0880478f * b),
-          clip(0.0113208f * r + 0.0432719f * g + 0.895617f * b)};
+  return {clip(0.627403895934699f * r + 0.3292830383778837f * g + 0.04331306568741723f * b),
+          clip(0.06909728935823207f * r + 0.919540395075459f * g + 0.01136231556630918f * b),
+          clip(0.01639143887515028f * r + 0.0880133078772257f * g + 0.895595253247624f * b)};
 }
 
 static float toGammaPQ(float linear) {
@@ -77,7 +77,7 @@ struct ValueTest : TestBase<ValueTest>,
   std::vector<uint16_t> values;
   std::vector<uint16_t> results;
 
-  void CompareResult(bool rel_error = false) {
+  void CompareResult() {
     auto unit = get<1>(GetParam());
     auto depth = uint8_t(get<2>(GetParam()));
 
@@ -96,17 +96,9 @@ struct ValueTest : TestBase<ValueTest>,
       auto b_ref = quant(toGammaPQ(b), float((1 << depth) - 1));
       auto a_ref = quant(h2f(values[4 * i + 3]), float((1 << depth) - 1));
 
-      if (rel_error) {
-        auto max = std::max({r_ref, g_ref, b_ref});
-        EXPECT_NEAR(r_ref, results[4 * i + 0], 2 + (max - r_ref) / 8) << "Mismatched at R value " << i;
-        EXPECT_NEAR(g_ref, results[4 * i + 1], 2 + (max - g_ref) / 8) << "Mismatched at G value " << i;
-        EXPECT_NEAR(b_ref, results[4 * i + 2], 2 + (max - b_ref) / 8) << "Mismatched at B value " << i;
-      } else {
-        EXPECT_NEAR(r_ref, results[4 * i + 0], 1) << "Mismatched at R value " << i;
-        EXPECT_NEAR(g_ref, results[4 * i + 1], 1) << "Mismatched at G value " << i;
-        EXPECT_NEAR(b_ref, results[4 * i + 2], 1) << "Mismatched at B value " << i;
-      }
-
+      EXPECT_NEAR(r_ref, results[4 * i + 0], 1) << "Mismatched at R value " << i;
+      EXPECT_NEAR(g_ref, results[4 * i + 1], 1) << "Mismatched at G value " << i;
+      EXPECT_NEAR(b_ref, results[4 * i + 2], 1) << "Mismatched at B value " << i;
       EXPECT_NEAR(a_ref, results[4 * i + 3], 1) << "Mismatched at A value " << i;
     }
   }
@@ -148,9 +140,17 @@ TEST_P(ValueTest, AllGray) {
 
   results.resize(size_t(4 * (max_value + 1)), 0xffff);
 
-  auto result =
-      scRGB2PQ({values.data(), static_cast<ptrdiff_t>(values.size()), results.data(),
-                static_cast<ptrdiff_t>(results.size()), static_cast<size_t>(max_value + 1), 1, unit, depth, prec});
+  scRGB2PQParams params {values.data(),
+                         static_cast<ptrdiff_t>(values.size()),
+                         results.data(),
+                         static_cast<ptrdiff_t>(results.size()),
+                         static_cast<size_t>(max_value + 1),
+                         1,
+                         unit,
+                         depth,
+                         prec};
+
+  auto result = scRGB2PQ(&params);
 
   if (result == -2) {
     GTEST_SKIP() << "Routine not compiled";
@@ -161,7 +161,7 @@ TEST_P(ValueTest, AllGray) {
   CompareResult();
 }
 
-TEST_P(ValueTest, DISABLED_RandomValues) {
+TEST_P(ValueTest, RandomValues) {
   auto unit = get<1>(GetParam());
   auto depth = uint8_t(get<2>(GetParam()));
   auto prec = get<3>(GetParam());
@@ -174,8 +174,8 @@ TEST_P(ValueTest, DISABLED_RandomValues) {
   size_t test_count = 1048576;
 
   values.reserve(test_count * 4);
-  std::default_random_engine rng {0};
-  std::uniform_real_distribution<float> rgb {0.005f, 4000.0f / unit};
+  std::mt19937 rng {0u};
+  std::uniform_real_distribution<float> rgb {0.0f, 4000.0f / unit};
   std::uniform_real_distribution<float> a {0.0f, 1.0f};
 
   for (size_t i = 0; i < test_count; ++i) {
@@ -187,16 +187,27 @@ TEST_P(ValueTest, DISABLED_RandomValues) {
 
   results.resize(test_count * 4, 0xffff);
 
-  auto result = scRGB2PQ({values.data(), static_cast<ptrdiff_t>(values.size()), results.data(),
-                          static_cast<ptrdiff_t>(results.size()), test_count, 1, unit, depth, prec});
+  scRGB2PQParams params {values.data(),
+                         static_cast<ptrdiff_t>(values.size()),
+                         results.data(),
+                         static_cast<ptrdiff_t>(results.size()),
+                         test_count,
+                         1,
+                         unit,
+                         depth,
+                         prec};
+
+  auto result = scRGB2PQ(&params);
 
   if (result == -2) {
     GTEST_SKIP() << "Routine not compiled";
   }
 
   ASSERT_EQ(result, 0);
+  ASSERT_NEAR(params.max_nits, 3985, 1);
+  ASSERT_EQ(params.avg_nits, 2001);
 
-  CompareResult(true);
+  CompareResult();
 }
 
 #if HWY_ARCH_X86_64
@@ -235,8 +246,12 @@ TEST_P(CorrectTest, PreciseWrite) {
   std::vector<uint16_t> values(size_t(pad_width * height * 4), 0);
   std::vector<uint16_t> results(size_t(pad_width * height * 4), 0xfefe);
 
-  auto result = scRGB2PQ({values.data(), static_cast<ptrdiff_t>(4 * pad_width), results.data(),
-                          static_cast<ptrdiff_t>(4 * pad_width), width, height, 80.0f, 10, UNorm12Bits});
+  scRGB2PQParams params {values.data(),  static_cast<ptrdiff_t>(4 * pad_width),
+                         results.data(), static_cast<ptrdiff_t>(4 * pad_width),
+                         width,          height,
+                         80.0f,          10,
+                         UNorm12Bits};
+  auto result = scRGB2PQ(&params);
 
   if (result == -2) {
     GTEST_SKIP() << "Routine not compiled";
@@ -286,7 +301,7 @@ struct BenchmarkTest : TestBase<BenchmarkTest>, testing::WithParamInterface<std:
   using clock = std::chrono::high_resolution_clock;
   using duration = std::chrono::duration<double, std::chrono::milliseconds::period>;
 
-  std::default_random_engine rng {0};
+  std::mt19937 rng {0u};
   std::uniform_real_distribution<float> rgb {0.0f, 10000.0f / 80.0f};
   std::uniform_real_distribution<float> a {0.0f, 1.0f};
 
@@ -303,8 +318,9 @@ struct BenchmarkTest : TestBase<BenchmarkTest>, testing::WithParamInterface<std:
 
     auto padded_width = width + 16;
 
-    src.reset(new (align) uint16_t[padded_width * height * 4]);
-    dst.reset(new (align) uint16_t[padded_width * height * 4]);
+    // MSVC quirk
+    src.reset(static_cast<uint16_t *>(operator new[](padded_width * height * 4 * sizeof(uint16_t), align)));
+    dst.reset(static_cast<uint16_t *>(operator new[](padded_width * height * 4 * sizeof(uint16_t), align)));
 
     for (size_t y = 0; y < height; ++y) {
       for (size_t x = 0; x < padded_width; ++x) {
@@ -338,8 +354,10 @@ struct BenchmarkTest : TestBase<BenchmarkTest>, testing::WithParamInterface<std:
 
     auto begin = clock::now();
 
+    scRGB2PQParams params {psrc, src_stride, pdst, dst_stride, width, height, 80.0f, 10, prec};
+
     for (int i = 0; i < n; ++i) {
-      auto result = scRGB2PQ({psrc, src_stride, pdst, dst_stride, width, height, 80.0f, 10, prec});
+      auto result = scRGB2PQ(&params);
 
       if (result == -2) {
         GTEST_SKIP() << "Routine not compiled";
