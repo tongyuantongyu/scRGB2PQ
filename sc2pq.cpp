@@ -307,9 +307,8 @@ SC2PQ_INTRIN_FUNC auto scRGB2PQOnce(const uint16_t *src, uint16_t *dst, scRGB2PQ
   const auto [rc, gc, bc, ac] = BT709ToBT2100Clip(cr, g, cb, a);
 
   hn::ScalableTag<float> f32;
-  auto wo =
-      hn::MulAdd(rc, hn::Set(f32, 0.262700212011267f),
-                 hn::MulAdd(gc, hn::Set(f32, 0.677998071518871f), hn::Mul(bc, hn::Set(f32, 0.05930171646986194f))));
+  auto wo = hn::MulAdd(rc - gc, hn::Set(f32, 0.262700212011267f),
+                       hn::MulAdd(bc - gc, hn::Set(f32, 0.05930171646986194f), gc));
 
   const auto rq = QuantN(PerceptualQuantization<mode>(rc), params.bound);
   const auto gq = QuantN(PerceptualQuantization<mode>(gc), params.bound);
