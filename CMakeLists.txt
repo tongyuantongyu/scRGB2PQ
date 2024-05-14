@@ -23,7 +23,7 @@ add_library(sc2pq sc2pq.h sc2pq.cpp)
 target_include_directories(sc2pq PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(sc2pq PUBLIC hwy)
 
-# This special target is for checking compiler-generated assembly.
+# This special target is for manually reviewing the assembly compiler generated.
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR CMAKE_CXX_SIMULATE_ID MATCHES "MSVC")
     add_library(sc2pq_asm OBJECT sc2pq_asm.cpp)
     set_source_files_properties(sc2pq_asm.cpp PROPERTIES
@@ -47,7 +47,7 @@ else ()
 endif ()
 
 if (SC2PQ_TUNE_NATIVE)
-    if (CMAKE_CXX_COMPILER_ID MATCHES "GCC"
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU"
             OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"
             OR CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
         if (CMAKE_CXX_SIMULATE_ID MATCHES "MSVC")
@@ -59,6 +59,7 @@ if (SC2PQ_TUNE_NATIVE)
         endif ()
     endif ()
 endif ()
+
 if (SC2PQ_LEAN_MODE)
     target_compile_definitions(sc2pq PRIVATE SC2PQ_LEAN)
     target_compile_definitions(sc2pq_asm PRIVATE SC2PQ_LEAN)
