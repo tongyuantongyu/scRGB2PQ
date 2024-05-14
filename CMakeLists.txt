@@ -7,6 +7,7 @@ set(SC2PQ_LEAN_MODE OFF CACHE BOOL "Use Lean implementation (Only generate code 
 set(SC2PQ_LOCAL_HWY ON CACHE BOOL "Use local highway library?")
 set(SC2PQ_ENABLE_TEST OFF CACHE BOOL "Enable test?")
 set(SC2PQ_LOCAL_GTEST ON CACHE BOOL "Use local googletest library?")
+set(SC2PQ_TUNE_NATIVE OFF CACHE BOOL "Tune for current platform?")
 
 if (SC2PQ_LOCAL_HWY)
     set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "")
@@ -42,10 +43,22 @@ else ()
             DEPENDS _sc2pq_asm
             VERBATIM)
     add_custom_target(sc2pq_asm DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/sc2pq.asm)
+    set_target_properties(sc2pq_asm PROPERTIES EXCLUDE_FROM_ALL ON)
 endif ()
 
-
-
+if (SC2PQ_TUNE_NATIVE)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GCC"
+            OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+            OR CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
+        if (CMAKE_CXX_SIMULATE_ID MATCHES "MSVC")
+            target_compile_options(sc2pq PRIVATE /tune:native)
+            target_compile_options(sc2pq_asm PRIVATE /tune:native)
+        else ()
+            target_compile_options(sc2pq PRIVATE -mtune=native)
+            target_compile_options(_sc2pq_asm PRIVATE -mtune=native)
+        endif ()
+    endif ()
+endif ()
 if (SC2PQ_LEAN_MODE)
     target_compile_definitions(sc2pq PRIVATE SC2PQ_LEAN)
     target_compile_definitions(sc2pq_asm PRIVATE SC2PQ_LEAN)
